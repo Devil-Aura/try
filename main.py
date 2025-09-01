@@ -1,68 +1,72 @@
 import os
-import asyncio
-import subprocess
 from pyrogram import Client, filters
+from pyrogram.types import Message, ForceReply
 
-# ================== CONFIG ==================
-API_ID =   
-API_HASH = ""
-BOT_TOKEN = ""
+# ==============================
+# CONFIG
+# ==============================
+API_ID = int(os.getenv("API_ID", ""))   
+API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-# Unique safe folder
-DOWNLOADS = "/root/leechbot_files"
-# ============================================
+# ==============================
+# START BOT
+# ==============================
+app = Client(
+    "LinkNamingBot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
 
-os.makedirs(DOWNLOADS, exist_ok=True)
+# Temporary storage for links
+user_links = {}
 
-app = Client("leechbot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-
-# Run command and capture output
-async def run_command(cmd):
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+@app.on_message(filters.command("start") & filters.private)
+async def start_handler(client: Client, message: Message):
+    await message.reply_text(
+        "👋 Hello! Send me a link and I will ask you to provide a custom name for it.\n\n"
+        "Example:\n`https://example.com/video.mp4` → `Name S01E01 480p Hindi`",
+        quote=True
     )
-    stdout, stderr = await process.communicate()
-    return stdout.decode().strip(), stderr.decode().strip()
 
 
-@app.on_message(filters.private & filters.text)
-async def leech_file(client, message):
-    url = message.text.strip()
-    status = await message.reply("🔎 Extracting link...")
+@app.on_message(filters.private & filters.text & ~filters.reply)
+async def link_receiver(client: Client, message: Message):
+    text = message.text.strip()
 
-    # Get title for filename
-    title_out, _ = await run_command(["yt-dlp", "--get-title", url])
-    if not title_out:
-        return await status.edit("❌ Could not extract title")
-
-    title = "".join(c if c.isalnum() or c in "._-" else "_" for c in title_out)[:60]
-    filepath = os.path.join(DOWNLOADS, f"{title}.mp4")
-
-    await status.edit("⬇️ Downloading file...")
-
-    # Download file with yt-dlp
-    _, err = await run_command(["yt-dlp", "-o", filepath, url])
-    if not os.path.exists(filepath):
-        return await status.edit(f"❌ Download failed\n{err}")
-
-    await status.edit("📤 Uploading to Telegram...")
-
-    try:
-        await client.send_video(
-            chat_id=message.chat.id,
-            video=filepath,
-            caption=f"✅ Here is your file:\n`{title}`",
-            supports_streaming=True
+    # Very simple check if it's a link
+    if text.startswith("http://") or text.startswith("https://"):
+        user_links[message.from_user.id] = text
+        await message.reply_text(
+            "🔗 Got your link!\n\nNow please reply with the **name you want** for this link:",
+            reply_markup=ForceReply(selective=True)
         )
-    except Exception as e:
-        await message.reply(f"❌ Upload failed: {e}")
-
-    # Clean up file
-    if os.path.exists(filepath):
-        os.remove(filepath)
-    await status.delete()
+    else:
+        await message.reply_text("❌ Please send a valid link starting with http:// or https://")
 
 
-print("✅ Bot is running...")
+@app.on_message(filters.private & filters.reply)
+async def name_receiver(client: Client, message: Message):
+    user_id = message.from_user.id
+
+    if user_id not in user_links:
+        await message.reply_text("⚠️ Please send me a link first.")
+        return
+
+    link = user_links.pop(user_id)
+    name = message.text.strip()
+
+    formatted = f"[{name}] {link}"
+    await message.reply_text(
+        f"✅ Saved:\n\n{formatted}",
+        quote=True
+    )
+
+
+# ==============================
+# RUN BOT
+# ==============================
+print("🤖 Bot Started...")
 app.run()
